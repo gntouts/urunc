@@ -1,0 +1,38 @@
+[generic_runtime]
+path = "/usr/bin/runc"
+
+[hypervisors]
+default = "qemu"
+default_memory = "2G"
+[hypervisors.qemu]
+path = "/usr/bin/qemu-system-x86_64"
+[hypervisors.qemu.options]
+default_memory = "4G"
+cli_options = [
+  "-enable-kvm",
+  "-cpu host",
+  "-smp 4",
+  "-m 4G",
+  "-netdev user,id=net0,hostfwd=tcp::2222-:22",
+  "-device e1000,netdev=net0"
+]
+
+[hypervisors.firecracker]
+path = "/usr/local/bin/firecracker"
+[hypervisors.firecracker.options]
+default_memory = "512M"
+cli_options = [
+  "--api-sock /tmp/firecracker.sock",
+  "--no-api",
+  "--disable-snapshotting"
+]
+
+[rootfs]
+use_devmapper = false
+use_sharedfs = true
+
+[logging]
+level = "debug"
+syslog = true
+timestamp = true
+timestamp_output = "/tmp/urunc.zlog"

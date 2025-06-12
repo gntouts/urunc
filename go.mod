@@ -15,6 +15,7 @@ require (
 	github.com/nubificus/hedge_cli v0.0.3
 	github.com/opencontainers/runc v1.2.6
 	github.com/opencontainers/runtime-spec v1.2.1
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus-community/pro-bing v0.7.0
 	github.com/rs/zerolog v1.33.0
 	github.com/sirupsen/logrus v1.9.3
