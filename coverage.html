@@ -1,0 +1,661 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>network: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/urunc-dev/urunc/pkg/network/network.go (30.0%)</option>
+				
+				<option value="file1">github.com/urunc-dev/urunc/pkg/network/network_dynamic.go (0.0%)</option>
+				
+				<option value="file2">github.com/urunc-dev/urunc/pkg/network/network_static.go (0.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Copyright (c) 2023-2025, Nubificus LTD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package network
+
+import (
+        "errors"
+        "fmt"
+        "net"
+        "strings"
+
+        "github.com/jackpal/gateway"
+        "github.com/sirupsen/logrus"
+        "github.com/vishvananda/netlink"
+        "golang.org/x/sys/unix"
+)
+
+const (
+        DefaultInterface = "eth0" // FIXME: Discover the veth endpoint name instead of using default "eth0". See: https://github.com/urunc-dev/urunc/issues/14
+        DefaultTap       = "tapX_urunc"
+)
+
+var netlog = logrus.WithField("subsystem", "network")
+
+type UnikernelNetworkInfo struct {
+        TapDevice string
+        EthDevice Interface
+}
+type Manager interface {
+        NetworkSetup(uid uint32, gid uint32) (*UnikernelNetworkInfo, error)
+}
+
+type Interface struct {
+        IP             string
+        DefaultGateway string
+        Mask           string
+        Interface      string
+        MAC            string
+}
+
+func NewNetworkManager(networkType string) (Manager, error) <span class="cov8" title="1">{
+        switch networkType </span>{
+        case "static":<span class="cov8" title="1">
+                return &amp;StaticNetwork{}, nil</span>
+        case "dynamic":<span class="cov8" title="1">
+                return &amp;DynamicNetwork{}, nil</span>
+        default:<span class="cov8" title="1">
+                return nil, fmt.Errorf("network manager %s not supported", networkType)</span>
+
+        }
+}
+
+func getTapIndex() (int, error) <span class="cov8" title="1">{
+        ifaces, err := net.Interfaces()
+        if err != nil </span><span class="cov0" title="0">{
+                return 0, err
+        }</span>
+        <span class="cov8" title="1">tapCount := 0
+        for _, iface := range ifaces </span><span class="cov8" title="1">{
+                if strings.Contains(iface.Name, "tap") </span><span class="cov0" title="0">{
+                        tapCount++
+                }</span>
+        }
+        <span class="cov8" title="1">if tapCount &gt; 255 </span><span class="cov0" title="0">{
+                return tapCount, fmt.Errorf("TAP interfaces count higher than 255")
+        }</span>
+        <span class="cov8" title="1">return tapCount, nil</span>
+}
+
+func createTapDevice(name string, mtu int, ownerUID, ownerGID uint32) (netlink.Link, error) <span class="cov0" title="0">{
+        tapLinkAttrs := netlink.NewLinkAttrs()
+        tapLinkAttrs.Name = name
+        tapLink := &amp;netlink.Tuntap{
+                LinkAttrs: tapLinkAttrs,
+
+                // We want a tap device (L2) as opposed to a tun (L3)
+                Mode: netlink.TUNTAP_MODE_TAP,
+
+                // Firecracker does not support multiqueue tap devices at this time:
+                // https://github.com/firecracker-microvm/firecracker/issues/750
+                Queues: 1,
+
+                Flags: netlink.TUNTAP_ONE_QUEUE | // single queue tap device
+                        netlink.TUNTAP_VNET_HDR, // parse vnet headers added by the vm's virtio_net implementation
+        }
+
+        err := netlink.LinkAdd(tapLink)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create tap device: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">for _, tapFd := range tapLink.Fds </span><span class="cov0" title="0">{
+                err = unix.IoctlSetInt(int(tapFd.Fd()), unix.TUNSETOWNER, int(ownerUID))
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("failed to set tap %s owner to uid %d: %w", name, ownerUID, err)
+                }</span>
+
+                <span class="cov0" title="0">err = unix.IoctlSetInt(int(tapFd.Fd()), unix.TUNSETGROUP, int(ownerGID))
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("failed to set tap %s group to gid %d: %w", name, ownerGID, err)
+                }</span>
+        }
+
+        <span class="cov0" title="0">err = netlink.LinkSetMTU(tapLink, mtu)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to set tap device MTU to %d: %w", mtu, err)
+        }</span>
+
+        <span class="cov0" title="0">return tapLink, nil</span>
+}
+
+// ensureEth0Exists checks all network interfaces in current netns and returns
+// nil if eth0 is present or ErrEth0NotFound if not
+func ensureEth0Exists() error <span class="cov8" title="1">{
+        ifaces, err := net.Interfaces()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">for _, iface := range ifaces </span><span class="cov8" title="1">{
+                if iface.Name == DefaultInterface </span><span class="cov0" title="0">{
+                        return nil
+                }</span>
+        }
+        <span class="cov8" title="1">return errors.New("eth0 device not found")</span>
+}
+
+func getInterfaceInfo(iface string) (Interface, error) <span class="cov8" title="1">{
+        ief, err := net.InterfaceByName(iface)
+        if err != nil </span><span class="cov8" title="1">{
+                return Interface{}, err
+        }</span>
+        <span class="cov8" title="1">IfMAC := ief.HardwareAddr.String()
+        if IfMAC == "" </span><span class="cov8" title="1">{
+                return Interface{}, fmt.Errorf("failed to get MAC address of %q", ief)
+        }</span>
+
+        <span class="cov0" title="0">addrs, err := ief.Addrs()
+        if err != nil </span><span class="cov0" title="0">{
+                return Interface{}, err
+        }</span>
+        <span class="cov0" title="0">ipAddress := ""
+        mask := ""
+        netMask := net.IPMask{}
+        for _, addr := range addrs </span><span class="cov0" title="0">{
+                ipNet, ok := addr.(*net.IPNet)
+                if ok &amp;&amp; !ipNet.IP.IsLoopback() &amp;&amp; ipNet.IP.To4() != nil </span><span class="cov0" title="0">{
+                        ipAddress = ipNet.IP.String()
+                        // hexadecimal notation
+                        mask = ipNet.Mask.String()
+                        netMask = ipNet.Mask
+                        break</span>
+                }
+        }
+        <span class="cov0" title="0">if mask == "" </span><span class="cov0" title="0">{
+                return Interface{}, fmt.Errorf("failed to find mask for %q", DefaultInterface)
+        }</span>
+        // convert to decimal notation
+        <span class="cov0" title="0">decimalParts := make([]string, len(netMask))
+        for i, part := range netMask </span><span class="cov0" title="0">{
+                decimalParts[i] = fmt.Sprintf("%d", part)
+        }</span>
+        <span class="cov0" title="0">mask = strings.Join(decimalParts, ".")
+        if ipAddress == "" </span><span class="cov0" title="0">{
+                return Interface{}, fmt.Errorf("failed to find IPv4 address for %q", DefaultInterface)
+        }</span>
+        <span class="cov0" title="0">gateway, err := gateway.DiscoverGateway()
+        if err != nil </span><span class="cov0" title="0">{
+                return Interface{}, err
+        }</span>
+        <span class="cov0" title="0">return Interface{
+                IP:             ipAddress,
+                DefaultGateway: gateway.String(),
+                Mask:           mask,
+                Interface:      DefaultInterface,
+                MAC:            IfMAC,
+        }, nil</span>
+}
+
+func addIngressQdisc(link netlink.Link) error <span class="cov0" title="0">{
+        ingress := &amp;netlink.Ingress{
+                QdiscAttrs: netlink.QdiscAttrs{
+                        LinkIndex: link.Attrs().Index,
+                        Parent:    netlink.HANDLE_INGRESS,
+                },
+        }
+        return netlink.QdiscAdd((ingress))
+}</span>
+
+func addRedirectFilter(source netlink.Link, target netlink.Link) error <span class="cov0" title="0">{
+        return netlink.FilterAdd(&amp;netlink.U32{
+                FilterAttrs: netlink.FilterAttrs{
+                        LinkIndex: source.Attrs().Index,
+                        Parent:    netlink.MakeHandle(0xffff, 0),
+                        Protocol:  unix.ETH_P_ALL,
+                },
+                Actions: []netlink.Action{
+                        &amp;netlink.MirredAction{
+                                ActionAttrs: netlink.ActionAttrs{
+                                        Action: netlink.TC_ACT_STOLEN,
+                                },
+                                MirredAction: netlink.TCA_EGRESS_REDIR,
+                                Ifindex:      target.Attrs().Index,
+                        },
+                },
+        })
+}</span>
+
+func networkSetup(tapName string, ipAddress string, redirectLink netlink.Link, addTCRules bool, uid uint32, gid uint32) (netlink.Link, error) <span class="cov0" title="0">{
+        err := ensureEth0Exists()
+        // if eth0 does not exist in the namespace, the unikernel was spawned using ctr, so we skip the network setup
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Warn("eth0 interface not found, assuming unikernel was spawned using ctr")
+                return nil, nil
+        }</span>
+        <span class="cov0" title="0">newTapDevice, err := createTapDevice(tapName, redirectLink.Attrs().MTU, uid, gid)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">if addTCRules </span><span class="cov0" title="0">{
+                err = addIngressQdisc(newTapDevice)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov0" title="0">err = addIngressQdisc(redirectLink)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov0" title="0">err = addRedirectFilter(newTapDevice, redirectLink)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+                <span class="cov0" title="0">err = addRedirectFilter(redirectLink, newTapDevice)
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, err
+                }</span>
+        }
+        <span class="cov0" title="0">ipn, err := netlink.ParseAddr(ipAddress)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">err = netlink.AddrReplace(newTapDevice, ipn)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov0" title="0">err = netlink.LinkSetUp(newTapDevice)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">return newTapDevice, nil</span>
+}
+
+func Cleanup(tapDevice string) error <span class="cov8" title="1">{
+        netlog.Debug("net cleanup called")
+        ifaces, err := net.Interfaces()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">for _, iface := range ifaces </span><span class="cov8" title="1">{
+                netlog.Debugf("Discovered device %s", iface.Name)
+        }</span>
+        <span class="cov8" title="1">tapLink, err := netlink.LinkByName(tapDevice)
+        if err != nil </span><span class="cov8" title="1">{
+                netlog.Errorf("Failed to get link %s by name: %v", tapDevice, err)
+                return nil
+        }</span>
+        <span class="cov0" title="0">err = deleteAllTCFilters(tapLink)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("Failed to delete all TC filters: %v", err)
+                return err
+        }</span>
+        <span class="cov0" title="0">err = deleteAllQDiscs(tapLink)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("Failed to delete all qdiscs: %v", err)
+                return err
+        }</span>
+        <span class="cov0" title="0">err = deleteTapDevice(tapLink)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("Failed to delete link %s: %v", tapDevice, err)
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+
+func deleteIngressQdisc(link netlink.Link) error <span class="cov8" title="1">{
+        qdiscs, err := netlink.QdiscList(link)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">for _, qdisc := range qdiscs </span><span class="cov8" title="1">{
+                if qdisc.Attrs().Parent == netlink.HANDLE_INGRESS &amp;&amp; qdisc.Attrs().LinkIndex == link.Attrs().Index </span><span class="cov0" title="0">{
+                        err = netlink.QdiscDel(qdisc)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return err
+                        }</span>
+                }
+        }
+        <span class="cov8" title="1">return nil</span>
+}
+
+func deleteAllQDiscs(device netlink.Link) error <span class="cov8" title="1">{
+        err := deleteIngressQdisc(device)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov8" title="1">device, err = netlink.LinkByName(DefaultInterface)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov0" title="0">err = deleteIngressQdisc(device)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+
+func deleteAllTCFilters(device netlink.Link) error <span class="cov8" title="1">{
+        var allFilters []netlink.Filter
+        parent := uint32(netlink.HANDLE_ROOT)
+        tapFilters, err := netlink.FilterList(device, parent)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">allFilters = append(allFilters, tapFilters...)
+
+        device, err = netlink.LinkByName(DefaultInterface)
+        if err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+        <span class="cov0" title="0">ethFilters, err := netlink.FilterList(device, parent)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+        <span class="cov0" title="0">allFilters = append(allFilters, ethFilters...)
+        for _, filter := range allFilters </span><span class="cov0" title="0">{
+                err = netlink.FilterDel(filter)
+                if err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+
+func deleteTapDevice(device netlink.Link) error <span class="cov8" title="1">{
+        err := netlink.LinkSetDown(device)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("Failed to set link down: %v", err)
+                return err
+        }</span>
+        <span class="cov0" title="0">err = netlink.LinkDel(device)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("Failed to delete link: %v", err)
+                return err
+        }</span>
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">// Copyright (c) 2023-2025, Nubificus LTD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package network
+
+import (
+        "fmt"
+        "strconv"
+        "strings"
+
+        "github.com/urunc-dev/urunc/internal/constants"
+        "github.com/vishvananda/netlink"
+)
+
+type DynamicNetwork struct {
+}
+
+// NetworkSetup checks if any tap device is available in the current netns. If it is, it assumes a running unikernel
+// is present in the current netns and returns an error, because network functionality for more than one unikernels
+// is not yet implemented.
+// If no TAP devices are available in the current netns, it creates a new tap device and
+// sets TC rules between the veth interface and the tap device inside the namespace.
+//
+// FIXME: CUrrently only one tap device per netns can provide functional networking. We need to find a proper way to handle networking
+// for multiple unikernels in the same pod/network namespace.
+// See: https://github.com/urunc-dev/urunc/issues/13
+func (n DynamicNetwork) NetworkSetup(uid uint32, gid uint32) (*UnikernelNetworkInfo, error) <span class="cov0" title="0">{
+        tapIndex, err := getTapIndex()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">if tapIndex &gt; 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("unsupported operation: can't spawn multiple unikernels in the same network namespace")
+        }</span>
+        <span class="cov0" title="0">redirectLink, err := netlink.LinkByName(DefaultInterface)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("failed to find %s interface", DefaultInterface)
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">newTapName := strings.ReplaceAll(DefaultTap, "X", strconv.Itoa(tapIndex))
+        ipTemplate := fmt.Sprintf("%s/24", constants.DynamicNetworkTapIP)
+        newIPAddr := strings.ReplaceAll(ipTemplate, "X", strconv.Itoa(tapIndex+1))
+        newTapDevice, err := networkSetup(newTapName, newIPAddr, redirectLink, true, uid, gid)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">ifInfo, err := getInterfaceInfo(DefaultInterface)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">return &amp;UnikernelNetworkInfo{
+                TapDevice: newTapDevice.Attrs().Name,
+                EthDevice: ifInfo,
+        }, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">// Copyright (c) 2023-2025, Nubificus LTD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package network
+
+import (
+        "bytes"
+        "fmt"
+        "os"
+        "os/exec"
+        "strings"
+
+        "github.com/urunc-dev/urunc/internal/constants"
+        "github.com/vishvananda/netlink"
+)
+
+var StaticIPAddr = fmt.Sprintf("%s/24", constants.StaticNetworkTapIP)
+
+type StaticNetwork struct {
+}
+
+// Apply the following rule:
+// iptables -t nat -A POSTROUTING -o &lt;IF&gt; -s &lt;IP&gt; -j MASQUERADE --wait 1
+// and write 1 to /proc/sys/net/ipv4/ip_forward to enable IP forwarding.
+func setNATRule(iface string, sourceIP string) error <span class="cov0" title="0">{
+        var args []string
+        var stdout, stderr bytes.Buffer
+
+        path, err := exec.LookPath("iptables")
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">file, err := os.OpenFile("/proc/sys/net/ipv4/ip_forward", os.O_WRONLY, 0644)
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to open /proc/sys/net/ipv4/ip_forward: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer file.Close()
+
+        _, err = file.WriteString("1")
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to enable IP forwarding: %w", err)
+        }</span>
+        <span class="cov0" title="0">netlog.Debug("Enabled IP forwarding")
+
+        args = append(args, path)
+        args = append(args, "-t")
+        args = append(args, "nat")
+        args = append(args, "-A")
+        args = append(args, "POSTROUTING")
+        args = append(args, "-s")
+        args = append(args, sourceIP)
+        args = append(args, "-o")
+        args = append(args, iface)
+        args = append(args, "-j")
+        args = append(args, "MASQUERADE")
+        args = append(args, "--wait")
+        args = append(args, "1")
+
+        cmd := exec.Cmd{
+                Path:   path,
+                Args:   args,
+                Stdout: &amp;stdout,
+                Stderr: &amp;stderr,
+        }
+        err = cmd.Run()
+        if err != nil </span><span class="cov0" title="0">{
+                switch err.(type) </span>{
+                case *exec.ExitError:<span class="cov0" title="0">
+                        return fmt.Errorf("iptables command %s failed: %s", cmd.String(), stderr.String())</span>
+                default:<span class="cov0" title="0">
+                        return err</span>
+                }
+        }
+
+        <span class="cov0" title="0">netlog.Debug("Applied iptables rule for NAT")
+
+        return nil</span>
+}
+
+func (n StaticNetwork) NetworkSetup(uid uint32, gid uint32) (*UnikernelNetworkInfo, error) <span class="cov0" title="0">{
+        newTapName := strings.ReplaceAll(DefaultTap, "X", "0")
+        addTCRules := false
+        redirectLink, err := netlink.LinkByName(DefaultInterface)
+        if err != nil </span><span class="cov0" title="0">{
+                netlog.Errorf("failed to find %s interface", DefaultInterface)
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">newTapDevice, err := networkSetup(newTapName, StaticIPAddr, redirectLink, addTCRules, uid, gid)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">err = setNATRule(DefaultInterface, StaticIPAddr)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov0" title="0">return &amp;UnikernelNetworkInfo{
+                TapDevice: newTapDevice.Attrs().Name,
+                EthDevice: Interface{
+                        IP:             constants.StaticNetworkUnikernelIP,
+                        DefaultGateway: constants.StaticNetworkTapIP,
+                        Mask:           "255.255.255.0",
+                        Interface:      DefaultInterface, // or tap0_urunc?
+                        MAC:            redirectLink.Attrs().HardwareAddr.String(),
+                },
+        }, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
